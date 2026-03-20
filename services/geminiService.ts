@@ -1,10 +1,6 @@
 
 import { SearchResult, InstagramProfile } from "../types";
 
-const isValidInstaUsername = (str: string): boolean => {
-  return /^[a-zA-Z0-9\._]{1,30}$/.test(str);
-};
-
 const normalizeQuery = (query: string): string => {
   const cleaned = query.trim();
 
@@ -94,25 +90,6 @@ export const performInstaSearch = async (query: string): Promise<SearchResult> =
       // ignore local fallback failure
     }
 
-    // Safe fallback: still show profile card + image if username looks valid
-    if (isValidInstaUsername(normalizedQuery)) {
-      return {
-        text: 'Live stats temporarily unavailable. Showing profile with fallback image.',
-        profiles: [
-          withAvatarFallback({
-            name: normalizedQuery,
-            bio: 'Live Instagram data is temporarily unavailable.',
-            url: `https://www.instagram.com/${normalizedQuery}/`,
-            username: normalizedQuery,
-            posts: undefined,
-            followers: undefined,
-            following: undefined,
-            isPrivate: undefined,
-          }),
-        ],
-      };
-    }
-
-    throw new Error('User not found on Instagram.');
+    throw new Error(error?.message || 'Live Instagram data could not be fetched right now. Try again.');
   }
 };

@@ -1,4 +1,11 @@
 const INSTAGRAM_APP_ID = '936619743392459';
+const WEB_BASE = 'https://www.instagram.com';
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+];
 
 const isValidInstaUsername = (str: string): boolean => {
   return /^[a-zA-Z0-9._]{1,30}$/.test(str);
@@ -21,30 +28,79 @@ const normalizeQuery = (query: string): string => {
   return cleaned;
 };
 
+const extractCookies = (setCookieHeader: string | null): string => {
+  if (!setCookieHeader) return '';
+
+  return setCookieHeader
+    .split(/,(?=[^;]+=[^;]+)/g)
+    .map((part) => part.split(';')[0].trim())
+    .filter(Boolean)
+    .join('; ');
+};
+
+const extractCsrf = (cookieHeader: string): string => {
+  const match = cookieHeader.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return match?.[1] || '';
+};
+
+const getSessionCookie = async (userAgent: string): Promise<string> => {
+  try {
+    const warmup = await fetch(`${WEB_BASE}/`, {
+      method: 'GET',
+      headers: {
+        'user-agent': userAgent,
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
+      },
+      redirect: 'follow',
+    });
+
+    return extractCookies(warmup.headers.get('set-cookie'));
+  } catch {
+    return '';
+  }
+};
+
 const fetchInstagramJson = async (path: string) => {
-  const response = await fetch(`https://www.instagram.com${path}`, {
-    method: 'GET',
-    headers: {
-      'x-ig-app-id': INSTAGRAM_APP_ID,
-      'x-requested-with': 'XMLHttpRequest',
-      'user-agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-      accept: 'application/json, text/plain, */*',
-      'accept-language': 'en-US,en;q=0.9',
-    },
-  });
+  let lastError: any = null;
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+  for (const userAgent of USER_AGENTS) {
+    const cookie = await getSessionCookie(userAgent);
+    const csrf = extractCsrf(cookie);
+
+    try {
+      const response = await fetch(`${WEB_BASE}${path}`, {
+        method: 'GET',
+        headers: {
+          'x-ig-app-id': INSTAGRAM_APP_ID,
+          'x-requested-with': 'XMLHttpRequest',
+          'user-agent': userAgent,
+          accept: 'application/json, text/plain, */*',
+          'accept-language': 'en-US,en;q=0.9',
+          origin: WEB_BASE,
+          referer: `${WEB_BASE}/`,
+          ...(cookie ? { cookie } : {}),
+          ...(csrf ? { 'x-csrftoken': csrf } : {}),
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data?.status === 'fail') {
+        throw new Error(data?.message || 'Instagram API failed');
+      }
+
+      return data;
+    } catch (error: any) {
+      lastError = error;
+    }
   }
 
-  const data = await response.json();
-
-  if (data?.status === 'fail') {
-    throw new Error(data?.message || 'Instagram API failed');
-  }
-
-  return data;
+  throw lastError || new Error('Instagram API failed');
 };
 
 const findUsernameFromSearch = async (query: string): Promise<string | null> => {
