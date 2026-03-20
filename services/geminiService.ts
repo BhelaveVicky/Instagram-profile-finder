@@ -1,7 +1,39 @@
 
 import { SearchResult, InstagramProfile } from "../types";
 
+const isValidInstaUsername = (str: string): boolean => {
+  return /^[a-zA-Z0-9\._]{1,30}$/.test(str);
+};
+
+const normalizeQuery = (query: string): string => {
+  const cleaned = query.trim();
+
+  if (!cleaned) return '';
+
+  if (cleaned.startsWith('@')) {
+    return cleaned.slice(1).trim();
+  }
+
+  const instaUrlMatch = cleaned.match(/instagram\.com\/([a-zA-Z0-9\._]+)/i);
+  if (instaUrlMatch?.[1]) {
+    return instaUrlMatch[1];
+  }
+
+  return cleaned;
+};
+
+const withAvatarFallback = (profile: InstagramProfile): InstagramProfile => ({
+  ...profile,
+  profilePic: profile.profilePic || `https://unavatar.io/instagram/${encodeURIComponent(profile.username)}`,
+});
+
 export const performInstaSearch = async (query: string): Promise<SearchResult> => {
+  const normalizedQuery = normalizeQuery(query);
+
+  if (!normalizedQuery) {
+    throw new Error('Please enter a valid Instagram username.');
+  }
+
   try {
     const response = await fetch(`/api/instagram?query=${encodeURIComponent(query)}`);
 
@@ -25,17 +57,62 @@ export const performInstaSearch = async (query: string): Promise<SearchResult> =
       throw new Error('User not found on Instagram.');
     }
 
-    const withFallbackPic: InstagramProfile = {
-      ...profile,
-      profilePic: profile.profilePic || `https://unavatar.io/instagram/${encodeURIComponent(profile.username)}`,
-    };
-
     return {
       text: data?.text || 'Live profile data fetched from Instagram.',
-      profiles: [withFallbackPic],
+      profiles: [withAvatarFallback(profile)],
     };
   } catch (error: any) {
     console.error('Instagram search failed:', error);
-    throw new Error(error?.message || 'Live Instagram data could not be fetched right now. Try again.');
+
+    // Dev fallback (works only locally where vite proxy exists)
+    try {
+      const localResponse = await fetch(`/ig-api/api/v1/users/web_profile_info/?username=${encodeURIComponent(normalizedQuery)}`);
+      if (localResponse.ok) {
+        const localData = await localResponse.json();
+        const user = localData?.data?.user;
+
+        if (user?.username) {
+          return {
+            text: 'Live profile data fetched from Instagram.',
+            profiles: [
+              withAvatarFallback({
+                name: user.full_name || user.username,
+                bio: user.biography || 'Instagram profile found.',
+                url: `https://www.instagram.com/${user.username}/`,
+                username: user.username,
+                profilePic: user.profile_pic_url_hd || user.profile_pic_url,
+                followers: user.edge_followed_by?.count,
+                following: user.edge_follow?.count,
+                posts: user.edge_owner_to_timeline_media?.count,
+                isPrivate: user.is_private,
+              }),
+            ],
+          };
+        }
+      }
+    } catch {
+      // ignore local fallback failure
+    }
+
+    // Safe fallback: still show profile card + image if username looks valid
+    if (isValidInstaUsername(normalizedQuery)) {
+      return {
+        text: 'Live stats temporarily unavailable. Showing profile with fallback image.',
+        profiles: [
+          withAvatarFallback({
+            name: normalizedQuery,
+            bio: 'Live Instagram data is temporarily unavailable.',
+            url: `https://www.instagram.com/${normalizedQuery}/`,
+            username: normalizedQuery,
+            posts: undefined,
+            followers: undefined,
+            following: undefined,
+            isPrivate: undefined,
+          }),
+        ],
+      };
+    }
+
+    throw new Error('User not found on Instagram.');
   }
 };
